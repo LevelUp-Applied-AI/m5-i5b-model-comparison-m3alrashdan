@@ -6,10 +6,7 @@ Module 5 culminating deliverable. Compare 6 model configurations using
 plots, log experiments, persist the best model, and demonstrate what
 tree-based models capture that linear models cannot.
 
-Complete the 9 functions below. See the integration guide for task-by-task
-detail.
-Run with:  python model_comparison.py
-Tests:     pytest tests/ -v
+
 """
 
 import os
@@ -45,9 +42,6 @@ NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges",
 def load_and_preprocess(filepath="data/telecom_churn.csv", random_state=42):
     """Load the Petra Telecom dataset and split into train/test sets.
 
-    Uses an 80/20 stratified split. Features are the 8 NUMERIC_FEATURES
-    columns. Target is `churned`.
-
     Args:
         filepath: Path to telecom_churn.csv.
         random_state: Random seed for reproducible split.
@@ -56,9 +50,11 @@ def load_and_preprocess(filepath="data/telecom_churn.csv", random_state=42):
         Tuple (X_train, X_test, y_train, y_test) where X contains only
         NUMERIC_FEATURES and y is the `churned` column.
     """
-    # TODO: Load the CSV, select NUMERIC_FEATURES into X, use `churned` as y,
-    #       split 80/20 with stratify=y.
-    pass
+    from sklearn.model_selection import train_test_split
+    df = pd.read_csv(filepath)
+    X = df[NUMERIC_FEATURES]
+    y = df["churned"]
+    return train_test_split(X, y, test_size=0.2, stratify=y, random_state=random_state)
 
 
 def define_models():
@@ -68,26 +64,36 @@ def define_models():
     at BOTH the linear and ensemble family levels. This lets you observe
     the class_weight effect at two levels of model complexity.
 
-    The 6 configurations:
-      1. DummyClassifier(strategy='most_frequent') — baseline
-      2. LogisticRegression(max_iter=1000) — linear default (needs scaling)
-      3. LogisticRegression(class_weight='balanced', max_iter=1000) — linear balanced (needs scaling)
-      4. DecisionTreeClassifier(max_depth=5) — tree baseline
-      5. RandomForestClassifier(n_estimators=100, max_depth=10) — ensemble default
-      6. RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced') — ensemble balanced
 
-    LR variants require StandardScaler preprocessing; tree-based models
-    do not. Use sklearn Pipeline to pair each model with its preprocessing.
 
-    Returns:
-        Dict of {name: sklearn.pipeline.Pipeline} with 6 entries.
-        Names: 'Dummy', 'LR_default', 'LR_balanced', 'DT_depth5',
-               'RF_default', 'RF_balanced'.
     """
-    # TODO: Build a Pipeline for each model. LR pipelines include
-    #       StandardScaler; tree pipelines use 'passthrough' for the
-    #       scaler step. All models with randomness use random_state=42.
-    pass
+    return {
+        "Dummy": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", DummyClassifier(strategy="most_frequent")),
+        ]),
+        "LR_default": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", LogisticRegression(max_iter=1000, random_state=42)),
+        ]),
+        "LR_balanced": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42)),
+        ]),
+        "DT_depth5": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", DecisionTreeClassifier(max_depth=5, random_state=42)),
+        ]),
+        "RF_default": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)),
+        ]),
+        "RF_balanced": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", RandomForestClassifier(n_estimators=100, max_depth=10,
+                                             class_weight="balanced", random_state=42)),
+        ]),
+    }
 
 
 def run_cv_comparison(models, X, y, n_splits=5, random_state=42):
@@ -110,10 +116,37 @@ def run_cv_comparison(models, X, y, n_splits=5, random_state=42):
         f1_mean, f1_std, pr_auc_mean, pr_auc_std.
         One row per model (6 rows total).
     """
-    # TODO: Create a StratifiedKFold splitter. For each model, loop over
-    #       folds: fit on train, predict on val, compute the 5 metrics.
-    #       Collect fold scores, compute mean ± std. Return as DataFrame.
-    pass
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    X_arr = np.array(X)
+    y_arr = np.array(y)
+    rows = []
+    for name, pipeline in models.items():
+        fold_scores = {m: [] for m in ["accuracy", "precision", "recall", "f1", "pr_auc"]}
+        for train_idx, val_idx in cv.split(X_arr, y_arr):
+            X_tr, X_val = X_arr[train_idx], X_arr[val_idx]
+            y_tr, y_val = y_arr[train_idx], y_arr[val_idx]
+            pipeline.fit(X_tr, y_tr)
+            y_pred = pipeline.predict(X_val)
+            y_prob = pipeline.predict_proba(X_val)[:, 1]
+            fold_scores["accuracy"].append(accuracy_score(y_val, y_pred))
+            fold_scores["precision"].append(precision_score(y_val, y_pred, zero_division=0))
+            fold_scores["recall"].append(recall_score(y_val, y_pred, zero_division=0))
+            fold_scores["f1"].append(f1_score(y_val, y_pred, zero_division=0))
+            fold_scores["pr_auc"].append(average_precision_score(y_val, y_prob))
+        rows.append({
+            "model": name,
+            "accuracy_mean":   np.mean(fold_scores["accuracy"]),
+            "accuracy_std":    np.std(fold_scores["accuracy"]),
+            "precision_mean":  np.mean(fold_scores["precision"]),
+            "precision_std":   np.std(fold_scores["precision"]),
+            "recall_mean":     np.mean(fold_scores["recall"]),
+            "recall_std":      np.std(fold_scores["recall"]),
+            "f1_mean":         np.mean(fold_scores["f1"]),
+            "f1_std":          np.std(fold_scores["f1"]),
+            "pr_auc_mean":     np.mean(fold_scores["pr_auc"]),
+            "pr_auc_std":      np.std(fold_scores["pr_auc"]),
+        })
+    return pd.DataFrame(rows)
 
 
 def save_comparison_table(results_df, output_path="results/comparison_table.csv"):
@@ -123,8 +156,7 @@ def save_comparison_table(results_df, output_path="results/comparison_table.csv"
         results_df: DataFrame from run_cv_comparison().
         output_path: Destination path.
     """
-    # TODO: Save results_df to CSV (with index=False).
-    pass
+    results_df.to_csv(output_path, index=False)
 
 
 def plot_pr_curves_top3(models, X_test, y_test, output_path="results/pr_curves.png"):
@@ -140,10 +172,18 @@ def plot_pr_curves_top3(models, X_test, y_test, output_path="results/pr_curves.p
         y_test: Test labels.
         output_path: Destination path for the PNG.
     """
-    # TODO: Compute PR-AUC for each model on the test set. Select the top 3.
-    #       Create a figure, plot each with PrecisionRecallDisplay.from_estimator
-    #       on the same axes. Title, save, close.
-    pass
+    aucs = {name: average_precision_score(y_test, m.predict_proba(X_test)[:, 1])
+            for name, m in models.items()}
+    top3 = sorted(aucs, key=aucs.get, reverse=True)[:3]
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for name in top3:
+        PrecisionRecallDisplay.from_estimator(models[name], X_test, y_test,
+                                              ax=ax, name=name)
+    ax.set_title("Precision-Recall Curves — Top 3 Models by PR-AUC")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_calibration_top3(models, X_test, y_test, output_path="results/calibration.png"):
@@ -157,9 +197,18 @@ def plot_calibration_top3(models, X_test, y_test, output_path="results/calibrati
         y_test: Test labels.
         output_path: Destination path for the PNG.
     """
-    # TODO: Same top 3 as PR curves. Create a figure, plot each with
-    #       CalibrationDisplay.from_estimator. Title, save, close.
-    pass
+    aucs = {name: average_precision_score(y_test, m.predict_proba(X_test)[:, 1])
+            for name, m in models.items()}
+    top3 = sorted(aucs, key=aucs.get, reverse=True)[:3]
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for name in top3:
+        CalibrationDisplay.from_estimator(models[name], X_test, y_test,
+                                          n_bins=10, ax=ax, name=name)
+    ax.set_title("Calibration Curves — Top 3 Models by PR-AUC")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
 
 
 def save_best_model(best_model, output_path="results/best_model.joblib"):
@@ -169,8 +218,7 @@ def save_best_model(best_model, output_path="results/best_model.joblib"):
         best_model: A fitted sklearn Pipeline.
         output_path: Destination path.
     """
-    # TODO: Call dump(best_model, output_path).
-    pass
+    dump(best_model, output_path)
 
 
 def log_experiment(results_df, output_path="results/experiment_log.csv"):
@@ -184,26 +232,23 @@ def log_experiment(results_df, output_path="results/experiment_log.csv"):
         results_df: DataFrame from run_cv_comparison().
         output_path: Destination path.
     """
-    # TODO: Build a log DataFrame with columns: model_name, accuracy,
-    #       precision, recall, f1, pr_auc (use the mean values from
-    #       results_df), and a timestamp column with the current time.
-    #       Save to CSV.
-    pass
+    ts = datetime.now().isoformat()
+    log_df = pd.DataFrame({
+        "model_name": results_df["model"],
+        "accuracy":   results_df["accuracy_mean"],
+        "precision":  results_df["precision_mean"],
+        "recall":     results_df["recall_mean"],
+        "f1":         results_df["f1_mean"],
+        "pr_auc":     results_df["pr_auc_mean"],
+        "timestamp":  ts,
+    })
+    log_df.to_csv(output_path, index=False)
 
 
 def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test, y_test,
                                      feature_names, min_diff=0.15):
     """Find ONE test sample where RF and LR predicted probabilities differ most.
 
-    The tree-vs-linear capability demonstration. The random forest can
-    capture feature interactions, non-monotonic relationships, and threshold
-    effects that a linear model cannot express with per-feature coefficients.
-    Finding a sample where the two models disagree — and explaining WHY in
-    structural terms — is evidence that trees have capabilities linear models
-    don't, regardless of aggregate PR-AUC.
-
-    Both models are Pipelines (preprocessing included), so both accept the
-    same raw X_test input.
 
     Args:
         rf_model: Fitted RF Pipeline (from define_models, already fitted).
@@ -222,11 +267,23 @@ def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test, y_test,
           - prob_diff (float): |rf_proba - lr_proba|
           - true_label (int): 0 or 1
     """
-    # TODO: Get predict_proba from both pipelines on X_test. Compute
-    #       absolute difference of P(churn=1). Find the sample with the
-    #       MAXIMUM difference (must be >= min_diff). Return the dict
-    #       with all six fields.
-    pass
+    rf_probas = rf_model.predict_proba(X_test)[:, 1]
+    lr_probas = lr_model.predict_proba(X_test)[:, 1]
+    diffs = np.abs(rf_probas - lr_probas)
+    max_idx = int(np.argmax(diffs))
+    if diffs[max_idx] < min_diff:
+        return None
+    y_arr = np.array(y_test)
+    X_arr = X_test if hasattr(X_test, "iloc") else pd.DataFrame(X_test, columns=feature_names)
+    fv = {name: float(X_arr.iloc[max_idx][name]) for name in feature_names}
+    return {
+        "sample_idx":    max_idx,
+        "feature_values": fv,
+        "rf_proba":      float(rf_probas[max_idx]),
+        "lr_proba":      float(lr_probas[max_idx]),
+        "prob_diff":     float(diffs[max_idx]),
+        "true_label":    int(y_arr[max_idx]),
+    }
 
 
 def main():
